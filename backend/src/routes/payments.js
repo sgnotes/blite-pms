@@ -5,6 +5,10 @@ import supabase from '../config/supabase.js';
 
 const router = Router();
 
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+  console.warn('WARNING: RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET not set — payment routes will fail');
+}
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -26,17 +30,23 @@ router.post('/create-order', async (req, res) => {
   const amountDue = Number(ledger.total_due) - Number(ledger.amount_paid);
   if (amountDue <= 0) return res.status(400).json({ error: 'No amount due' });
 
-  const order = await razorpay.orders.create({
-    amount: Math.round(amountDue * 100), // paise
-    currency: 'INR',
-    receipt: ledger_id,
-    notes: {
-      tenant_id: ledger.tenant_id,
-      ledger_id,
-      billing_month: ledger.billing_month,
-      billing_year: ledger.billing_year,
-    }
-  });
+  let order;
+  try {
+    order = await razorpay.orders.create({
+      amount: Math.round(amountDue * 100), // paise
+      currency: 'INR',
+      receipt: ledger_id.slice(0, 40), // Razorpay receipt max 40 chars
+      notes: {
+        tenant_id: ledger.tenant_id,
+        ledger_id,
+        billing_month: ledger.billing_month,
+        billing_year: ledger.billing_year,
+      }
+    });
+  } catch (e) {
+    console.error('Razorpay order creation failed:', e);
+    return res.status(502).json({ error: `Razorpay error: ${e.error?.description || e.message}` });
+  }
 
   // Save order ID to ledger
   await supabase.from('rent_ledger')
@@ -70,7 +80,13 @@ router.post('/verify', async (req, res) => {
   }
 
   // Fetch payment details from Razorpay
-  const payment = await razorpay.payments.fetch(razorpay_payment_id);
+  let payment;
+  try {
+    payment = await razorpay.payments.fetch(razorpay_payment_id);
+  } catch (e) {
+    console.error('Razorpay payment fetch failed:', e);
+    return res.status(502).json({ error: `Razorpay error: ${e.error?.description || e.message}` });
+  }
 
   const amountPaid = payment.amount / 100;
 
@@ -158,11 +174,14 @@ router.get('/ledger', async (req, res) => {
 router.post('/generate-ledger', async (req, res) => {
   const { property_id, billing_month, billing_year } = req.body;
 
-  const { data: tenants } = await supabase
+  const { data: tenants, error: tenantsError } = await supabase
     .from('tenants')
     .select('id, room_id, rent_amount, rent_due_day')
     .eq('property_id', property_id)
     .eq('status', 'active');
+
+  if (tenantsError) return res.status(500).json({ error: tenantsError.message });
+  if (!tenants?.length) return res.json({ created: 0, entries: [] });
 
   const entries = tenants.map(t => ({
     tenant_id: t.id,
