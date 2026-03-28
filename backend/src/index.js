@@ -22,7 +22,23 @@ const PORT = process.env.PORT || 3001;
 
 // ── Middleware ───────────────────────────────────────────────
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL, credentials: true }));
+
+// Support comma-separated list of allowed origins, e.g.:
+// FRONTEND_URL=https://manage.blite.in,https://blite-pms.vercel.app
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:5173')
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow server-to-server (no Origin) and listed origins
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+  credentials: true,
+}));
+
 app.use(morgan('dev'));
 
 // Raw body for Razorpay webhook signature verification
