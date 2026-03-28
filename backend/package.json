@@ -1,8 +1,6 @@
 {
   "name": "blite-pms-backend",
   "version": "1.0.0",
-  "description": "Blite PMS — Node.js + Express backend",
-  "main": "src/index.js",
   "type": "module",
   "scripts": {
     "dev": "nodemon src/index.js",
@@ -17,12 +15,7 @@
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "razorpay": "^2.9.2",
-    "puppeteer": "^21.0.0",
-    "handlebars": "^4.7.8",
     "axios": "^1.6.7",
     "zod": "^3.22.4"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.3"
   }
 }
