@@ -1,75 +1,9 @@
-import axios from 'axios';
-import { supabase } from './supabase.js';
-
-const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api',
-  headers: { 'Content-Type': 'application/json' },
-});
-
-// Inject Supabase JWT on every request
-api.interceptors.request.use(async (config) => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    config.headers.Authorization = `Bearer ${session.access_token}`;
-  }
-  return config;
-});
-
-// Handle 401s
-api.interceptors.response.use(
-  res => res,
-  async (error) => {
-    if (error.response?.status === 401) {
-      await supabase.auth.signOut();
-      window.location.href = '/login';
-    }
-    return Promise.reject(error);
-  }
-);
-
-// ── API methods ───────────────────────────────────────────────
-
-export const dashboardApi = {
-  getSummary: (propertyId) => api.get(`/dashboard/summary?property_id=${propertyId}`),
-};
-
-export const tenantsApi = {
-  list: (params) => api.get('/tenants', { params }),
-  get: (id) => api.get(`/tenants/${id}`),
-  create: (data) => api.post('/tenants', data),
-  update: (id, data) => api.patch(`/tenants/${id}`, data),
-  vacate: (id) => api.delete(`/tenants/${id}`),
-  uploadKyc: (id, data) => api.post(`/tenants/${id}/kyc`, data),
-};
-
-export const roomsApi = {
-  list: (params) => api.get('/rooms', { params }),
-  get: (id) => api.get(`/rooms/${id}`),
-  create: (data) => api.post('/rooms', data),
-  update: (id, data) => api.patch(`/rooms/${id}`, data),
-};
-
-export const paymentsApi = {
-  getLedger: (params) => api.get('/payments/ledger', { params }),
-  createOrder: (ledgerId) => api.post('/payments/create-order', { ledger_id: ledgerId }),
-  verifyPayment: (data) => api.post('/payments/verify', data),
-  recordManual: (data) => api.post('/payments/record-manual', data),
-  generateLedger: (data) => api.post('/payments/generate-ledger', data),
-};
-
-export const maintenanceApi = {
-  list: (params) => api.get('/maintenance', { params }),
-  get: (id) => api.get(`/maintenance/${id}`),
-  create: (data) => api.post('/maintenance', data),
-  update: (id, data) => api.patch(`/maintenance/${id}`, data),
-};
-
-export const deedsApi = {
-  list: (params) => api.get('/rent-deeds', { params }),
-  get: (id) => api.get(`/rent-deeds/${id}`),
-  create: (data) => api.post('/rent-deeds', data),
-  generatePdf: (id) => api.post(`/rent-deeds/${id}/generate-pdf`),
-  sendForSign: (id) => api.post(`/rent-deeds/${id}/send-for-sign`),
-};
-
-export default api;
+import { supabase } from './supabase.js'
+export const getPropertyId = async () => { const { data } = await supabase.from('properties').select('id').limit(1).single(); return data?.id }
+export const roomsApi = { create: async (data) => supabase.from('rooms').insert(data).select().single(), list: async (p={}) => { let q = supabase.from('rooms').select('*, tenants(id,full_name,status)').order('room_number'); if(p.property_id) q=q.eq('property_id',p.property_id); return q }, update: async (id,data) => supabase.from('rooms').update(data).eq('id',id).select().single() }
+export const tenantsApi = { list: async (p={}) => { let q=supabase.from('tenants').select('*, rooms(room_number,floor)').order('created_at',{ascending:false}); if(p.property_id) q=q.eq('property_id',p.property_id); if(p.status) q=q.eq('status',p.status); return q }, get: async (id) => supabase.from('tenants').select('*, rooms(*), kyc_documents(*)').eq('id',id).single(), create: async (data) => supabase.from('tenants').insert(data).select().single(), update: async (id,data) => supabase.from('tenants').update(data).eq('id',id).select().single(), uploadKyc: async (id,data) => supabase.from('kyc_documents').insert({tenant_id:id,...data}).select().single() }
+export const maintenanceApi = { list: async (p={}) => { let q=supabase.from('maintenance_tickets').select('*, rooms(room_number), tenants(full_name)').order('created_at',{ascending:false}); if(p.property_id) q=q.eq('property_id',p.property_id); return q }, create: async (data) => supabase.from('maintenance_tickets').insert(data).select().single(), update: async (id,data) => supabase.from('maintenance_tickets').update(data).eq('id',id).select().single() }
+export const deedsApi = { list: async (p={}) => { let q=supabase.from('rent_deeds').select('*, tenants(full_name,phone), rooms(room_number)').order('created_at',{ascending:false}); if(p.property_id) q=q.eq('property_id',p.property_id); return q }, create: async (data) => supabase.from('rent_deeds').insert(data).select().single() }
+export const paymentsApi = { getLedger: async (p={}) => { let q=supabase.from('rent_ledger').select('*, tenants(full_name,phone), rooms(room_number)').order('due_date',{ascending:false}); if(p.property_id) q=q.eq('property_id',p.property_id); if(p.billing_month) q=q.eq('billing_month',p.billing_month); if(p.billing_year) q=q.eq('billing_year',p.billing_year); return q }, generateLedger: async ({property_id,billing_month,billing_year}) => { const {data:tenants}=await supabase.from('tenants').select('id,room_id,rent_amount,rent_due_day').eq('property_id',property_id).eq('status','active'); if(!tenants?.length) return {data:{created:0}}; const entries=tenants.map(t=>({tenant_id:t.id,property_id,room_id:t.room_id,billing_month,billing_year,due_date:`${billing_year}-${String(billing_month).padStart(2,'0')}-${String(t.rent_due_day||1).padStart(2,'0')}`,rent_amount:t.rent_amount,payment_status:'pending'})); const {data,error}=await supabase.from('rent_ledger').upsert(entries,{onConflict:'tenant_id,billing_month,billing_year'}).select(); if(error) throw error; return {data:{created:data.length}} }, recordManual: async ({ledger_id,amount_paid,payment_method,payment_date,transaction_id,notes}) => { const {data:l}=await supabase.from('rent_ledger').select('total_due').eq('id',ledger_id).single(); const status=Number(amount_paid)>=Number(l?.total_due)?'paid':'partial'; return supabase.from('rent_ledger').update({amount_paid,payment_status:status,payment_method,payment_date,transaction_id,notes}).eq('id',ledger_id).select().single() } }
+export const dashboardApi = { getSummary: async (property_id) => { const now=new Date(); const month=now.getMonth()+1; const year=now.getFullYear(); const [rooms,ledger,tickets]=await Promise.all([supabase.from('rooms').select('status').eq('property_id',property_id),supabase.from('rent_ledger').select('payment_status,total_due,amount_paid').eq('property_id',property_id).eq('billing_month',month).eq('billing_year',year),supabase.from('maintenance_tickets').select('status,priority').eq('property_id',property_id).in('status',['open','in_progress'])]); const r=rooms.data||[]; const l=ledger.data||[]; const t=tickets.data||[]; const totalDue=l.reduce((s,x)=>s+Number(x.total_due||0),0); const totalPaid=l.reduce((s,x)=>s+Number(x.amount_paid||0),0); return {data:{rooms:{total:r.length,occupied:r.filter(x=>x.status==='occupied').length,vacant:r.filter(x=>x.status==='vacant').length},rent:{month,year,total_due:totalDue,total_collected:totalPaid,collection_rate:totalDue>0?Math.round(totalPaid/totalDue*100):0,paid_count:l.filter(x=>x.payment_status==='paid').length,pending_count:l.filter(x=>x.payment_status==='pending').length,overdue_count:l.filter(x=>x.payment_status==='overdue').length},tickets:{open:t.filter(x=>x.status==='open').length,in_progress:t.filter(x=>x.status==='in_progress').length,urgent:t.filter(x=>x.priority==='urgent').length}}} } }
+export default { get: ()=>{}, post: ()=>{} }
