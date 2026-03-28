@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { tenantsApi } from '../lib/api'
 import { toast } from 'sonner'
 import { Plus, Search, X, UserPlus } from 'lucide-react'
 
 const fmt = n => '₹' + Number(n || 0).toLocaleString('en-IN')
-
 const kycColor = { pending:'yellow', submitted:'blue', verified:'green', rejected:'red' }
 const statusColor = { active:'green', notice_period:'yellow', vacated:'gray' }
 
@@ -27,7 +25,7 @@ export default function Tenants() {
     setPropertyId(pid)
     const [tr, rr] = await Promise.all([
       supabase.from('tenants').select('*, rooms(room_number, floor)').eq('property_id', pid).order('created_at', { ascending: false }),
-      supabase.from('rooms').select('id, room_number, floor, capacity, occupied_beds, status').eq('property_id', pid).order('room_number')
+      supabase.from('rooms').select('id, room_number, floor, capacity, occupied_beds, status, base_rent').eq('property_id', pid).order('room_number')
     ])
     setTenants(tr.data || [])
     setRooms(rr.data || [])
@@ -38,7 +36,7 @@ export default function Tenants() {
 
   const filtered = tenants.filter(t => {
     const matchStatus = filter === 'all' || t.status === filter
-    const matchSearch = !search || t.full_name.toLowerCase().includes(search.toLowerCase()) || t.phone.includes(search) || t.rooms?.room_number?.includes(search)
+    const matchSearch = !search || t.full_name?.toLowerCase().includes(search.toLowerCase()) || t.phone?.includes(search) || t.rooms?.room_number?.includes(search)
     return matchStatus && matchSearch
   })
 
@@ -93,7 +91,7 @@ export default function Tenants() {
                     <td><span className="badge badge-gray">{t.rooms?.room_number}</span></td>
                     <td style={{ fontFamily:'var(--mono)', color:'var(--text2)' }}>{t.phone}</td>
                     <td style={{ fontFamily:'var(--mono)' }}>{fmt(t.rent_amount)}</td>
-                    <td style={{ color:'var(--text2)', fontSize:12 }}>{new Date(t.check_in_date).toLocaleDateString('en-IN')}</td>
+                    <td style={{ color:'var(--text2)', fontSize:12 }}>{t.check_in_date ? new Date(t.check_in_date).toLocaleDateString('en-IN') : '—'}</td>
                     <td><span className={`badge badge-${kycColor[t.kyc_status]||'gray'}`}>{t.kyc_status}</span></td>
                     <td><span className={`badge badge-${statusColor[t.status]||'gray'}`}>{t.status}</span></td>
                   </tr>
@@ -120,7 +118,7 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
   const [step, setStep] = useState(1)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
-    full_name:'', phone:'', email:'', gender:'male', date_of_birth:'',
+    full_name:'', phone:'', email:'', gender:'male',
     occupation:'working', company_or_college:'',
     permanent_address:'', home_city:'', home_state:'',
     emergency_contact_name:'', emergency_contact_phone:'', emergency_contact_relation:'',
@@ -129,7 +127,6 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
     meal_plan:'none', expected_stay_months:'12', notes:''
   })
   const set = k => e => setForm(f => ({ ...f, [k]: e.target.value }))
-
   const selectedRoom = rooms.find(r => r.id === form.room_id)
 
   const handleSave = async () => {
@@ -137,13 +134,30 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
       toast.error('Please fill all required fields')
       return
     }
+    if (!propertyId) {
+      toast.error('No property found. Please refresh and try again.')
+      return
+    }
     setSaving(true)
     try {
-      await tenantsApi.create({ ...form, property_id: propertyId, rent_due_day: parseInt(form.rent_due_day) })
+      const payload = {
+        ...form,
+        property_id: propertyId,
+        rent_due_day: parseInt(form.rent_due_day) || 1,
+        rent_amount: Number(form.rent_amount),
+        security_deposit_paid: Number(form.security_deposit_paid || 0),
+        expected_stay_months: parseInt(form.expected_stay_months) || 12,
+      }
+      const { data, error } = await supabase.from('tenants').insert(payload).select().single()
+      if (error) throw error
       toast.success('Tenant added successfully!')
       onSaved()
-    } catch (e) { toast.error(e.response?.data?.error || 'Failed to add tenant') }
-    finally { setSaving(false) }
+    } catch (e) {
+      console.error('Tenant create error:', e)
+      toast.error(e.message || 'Failed to add tenant')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -157,7 +171,6 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
           <button className="modal-close" onClick={onClose}><X size={18} /></button>
         </div>
 
-        {/* Step indicator */}
         <div style={{ display:'flex', gap:6, marginBottom:24 }}>
           {['Personal','Stay details','Emergency'].map((s,i) => (
             <div key={i} style={{ flex:1, height:3, borderRadius:3, background: step > i ? 'var(--accent)' : 'var(--bg4)', transition:'background 0.2s' }} />
@@ -199,12 +212,12 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
               <select className="input" value={form.room_id} onChange={set('room_id')}>
                 <option value="">Select a room</option>
                 {rooms.map(r => (
-                  <option key={r.id} value={r.id} disabled={r.occupied_beds >= r.capacity && r.id !== form.room_id}>
-                    Room {r.room_number} (Floor {r.floor}) — {r.occupied_beds}/{r.capacity} beds {r.occupied_beds >= r.capacity ? '· FULL' : ''}
+                  <option key={r.id} value={r.id}>
+                    Room {r.room_number} (Floor {r.floor}) — {r.occupied_beds}/{r.capacity} beds {r.occupied_beds >= r.capacity ? '· FULL' : '· Available'}
                   </option>
                 ))}
               </select>
-              {selectedRoom && <div style={{ fontSize:12, color:'var(--text2)', marginTop:4 }}>Base rent: ₹{selectedRoom.base_rent?.toLocaleString('en-IN')}/mo</div>}
+              {selectedRoom && <div style={{ fontSize:12, color:'var(--text2)', marginTop:4 }}>Base rent: ₹{Number(selectedRoom.base_rent).toLocaleString('en-IN')}/mo</div>}
             </div>
             <div className="grid-2">
               <div className="field"><label className="label">Check-in date *</label><input className="input" type="date" value={form.check_in_date} onChange={set('check_in_date')} /></div>
@@ -229,7 +242,7 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
                 </select>
               </div>
             </div>
-            <div className="field"><label className="label">Notes</label><textarea className="input" placeholder="Any special arrangements, notes..." value={form.notes} onChange={set('notes')} style={{ minHeight:60 }} /></div>
+            <div className="field"><label className="label">Notes</label><textarea className="input" placeholder="Any special arrangements..." value={form.notes} onChange={set('notes')} style={{ minHeight:60 }} /></div>
           </div>
         )}
 
@@ -241,7 +254,6 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
               <div className="field"><label className="label">Relation</label><input className="input" placeholder="Father, Mother, Spouse..." value={form.emergency_contact_relation} onChange={set('emergency_contact_relation')} /></div>
             </div>
             <div className="field"><label className="label">Contact phone</label><input className="input" placeholder="Emergency phone number" value={form.emergency_contact_phone} onChange={set('emergency_contact_phone')} /></div>
-
             <div style={{ background:'var(--bg3)', borderRadius:'var(--radius)', padding:16, marginTop:8 }}>
               <p className="section-title" style={{ marginBottom:10 }}>Summary</p>
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'6px 16px', fontSize:13 }}>
@@ -249,6 +261,7 @@ function AddTenantModal({ propertyId, rooms, onClose, onSaved }) {
                 <div style={{ color:'var(--text2)' }}>Room</div><div>{rooms.find(r=>r.id===form.room_id)?.room_number || '—'}</div>
                 <div style={{ color:'var(--text2)' }}>Monthly rent</div><div style={{ fontFamily:'var(--mono)' }}>₹{Number(form.rent_amount||0).toLocaleString('en-IN')}</div>
                 <div style={{ color:'var(--text2)' }}>Check-in</div><div>{form.check_in_date}</div>
+                <div style={{ color:'var(--text2)' }}>Property ID</div><div style={{ fontSize:10, fontFamily:'var(--mono)', color:'var(--text3)' }}>{propertyId?.slice(0,8)}...</div>
               </div>
             </div>
           </div>
